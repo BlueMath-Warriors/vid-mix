@@ -1,0 +1,902 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Video Editor</title>
+  <script>
+    (function () {
+      try {
+        var saved = localStorage.getItem('standalone-video-editor-theme');
+        var prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        var theme = saved || (prefersDark ? 'dark' : 'light');
+        document.documentElement.setAttribute('data-theme', theme === 'dark' ? 'dark' : 'light');
+      } catch (e) { }
+    })();
+  </script>
+  <link href="/static/libs/fonts/inter/inter.css" rel="stylesheet">
+  <link rel="stylesheet" href="/static/libs/fontawesome/all.min.css">
+  <link rel="stylesheet" href="/static/css/video-lab.css">
+  
+  <style>
+    /* More compact theme toggle for video lab - match export button height */
+    .top-nav-bar .theme-toggle.compact {
+      width: 32px;
+      height: 24px;
+      padding: 0;
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    
+    .top-nav-bar .theme-toggle.compact i {
+      font-size: 12px;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="video-editor-v2-container">
+    <!-- Top Navigation Bar -->
+    <header class="top-nav-bar">
+      <div class="nav-left">
+        <div class="app-branding">
+          <i class="fas fa-film branding-icon"></i>
+          <span class="app-name">Video Editor</span>
+        </div>
+      </div>
+
+      <div class="nav-center">
+        <div class="project-title-input" role="button" tabindex="0" aria-label="Edit project name">
+          <span class="project-name-display" id="project-title">Untitled</span>
+          <span class="save-status" id="save-status" hidden aria-live="polite"></span>
+          <input type="text" id="project-name-input" style="display: none;" value="Untitled" placeholder="Project Name" aria-label="Project name">
+          <i class="fas fa-pen" aria-hidden="true"></i>
+        </div>
+      </div>
+
+      <div class="nav-right">
+        <button type="button" class="header-btn export-btn" id="export-btn" aria-label="Export timeline to video file" title="Export video">
+          <i class="fas fa-file-export" aria-hidden="true"></i>
+          <span>Export</span>
+        </button>
+
+        <div class="nav-separator"></div>
+
+        <!-- Theme Toggle Button -->
+        <button type="button" class="theme-toggle compact" id="standalone-theme-toggle" aria-label="Toggle dark mode" title="Toggle theme">
+          <i class="fas fa-sun"></i>
+          <i class="fas fa-moon"></i>
+        </button>
+      </div>
+    </header>
+
+    <div class="editor-banner editor-banner--warning" id="ffmpeg-wasm-banner" style="display: none;" role="status">
+      <span>Video export needs FFmpeg WebAssembly. Add <code>ffmpeg-core.wasm</code> under <code>static/libs/ffmpeg/</code> or run <code>scripts/fetch_ffmpeg_wasm.ps1</code> / <code>scripts/fetch_ffmpeg_wasm.sh</code>, then reload.</span>
+    </div>
+
+    <!-- Full Screen Loading Overlay -->
+    <div class="video-editor-loading" id="video-editor-loading" style="display: none;" aria-busy="true" aria-modal="true" role="dialog" aria-labelledby="loading-overlay-message">
+      <div class="loading-content">
+        <div class="loading-spinner"></div>
+        <p class="loading-text" id="loading-overlay-message">Loading project...</p>
+      </div>
+    </div>
+
+    <div class="video-editor-loading" id="project-error-overlay" style="display: none;" aria-modal="true" role="alertdialog" aria-labelledby="project-error-message">
+      <div class="loading-content project-error-inner">
+        <p class="loading-text" id="project-error-message">This project could not be loaded.</p>
+        <div class="project-error-actions">
+          <button type="button" class="header-btn export-btn" id="project-error-new-btn">Create new project</button>
+          <button type="button" class="header-btn project-error-btn-secondary" id="project-error-home-btn">Go home</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Main Content Area -->
+    <main class="main-content-area" id="main-editor">
+      <!-- Import Section Wrapper (Sidebar + Grid) -->
+      <div class="import-section-wrapper">
+        <!-- Import Section Header (Nav Icons) -->
+        <nav class="import-section-header" aria-label="Editor tools">
+          <div class="nav-tools-list" role="toolbar" aria-label="Tool switcher">
+            <div class="nav-tool active" data-tool="media" id="nav-media" role="button" tabindex="0" aria-current="true">
+              <i class="fas fa-images" aria-hidden="true"></i>
+              <span>Media</span>
+            </div>
+            <div class="nav-tool" data-tool="audio" id="nav-audio" role="button" tabindex="0">
+              <i class="fas fa-music" aria-hidden="true"></i>
+              <span>Audio</span>
+            </div>
+            <div class="nav-tool" data-tool="text" id="nav-text" role="button" tabindex="0">
+              <i class="fas fa-font" aria-hidden="true"></i>
+              <span>Text</span>
+            </div>
+            <div class="nav-tool locked" data-tool="transitions" id="nav-transitions" role="button" tabindex="-1" aria-disabled="true" title="Transitions are not available in the standalone editor">
+              <i class="fas fa-exchange-alt" aria-hidden="true"></i>
+              <span>Transitions</span>
+              <i class="fas fa-lock nav-tool-lock" aria-hidden="true"></i>
+            </div>
+            <div class="nav-tool" data-tool="filters" id="nav-filters" role="button" tabindex="0">
+              <i class="fas fa-filter" aria-hidden="true"></i>
+              <span>Filters</span>
+            </div>
+            <!-- REMOVED: Stickers, Captions, Adjustment, Effects, Templates, AI Avatars -->
+          </div>
+        </nav>
+
+        <!-- Import Body (Grid column) -->
+        <div class="import-container-body">
+          <div class="import-content-column">
+            <!-- Media Import Zone -->
+            <div class="media-import-zone" id="media-import-zone">
+              <!-- Project Assets Content -->
+              <div class="import-content-panel active" id="project-assets-panel">
+                <div class="import-dropzone" id="import-dropzone">
+                  <i class="fas fa-plus import-icon" aria-hidden="true"></i>
+                  <div class="import-text">Add media to this project</div>
+                  <p class="import-hint">Drag and drop files here, or choose from your device.</p>
+                  <p class="import-formats-hint">Supported: MP4, WebM, MOV, common images (PNG, JPG, …), MP3, WAV, AAC, and more.</p>
+                  <button type="button" class="import-choose-files-btn header-btn export-btn" id="import-choose-files-btn">Choose files</button>
+                  <input type="file" id="file-input" accept="video/mp4,video/webm,video/quicktime,image/*,audio/mp3,audio/wav,audio/ogg,audio/aac,audio/m4a,audio/*" multiple hidden>
+                </div>
+
+                <!-- Asset Grid (shown when assets exist) -->
+                <div class="asset-grid" id="asset-grid">
+                  <!-- Assets will be added here -->
+                </div>
+              </div>
+
+              <!-- Audio Content -->
+              <div class="import-content-panel" id="audio-panel">
+                <div class="library-loading" id="audio-loading" style="display: none;">
+                  <div class="spinner"></div>
+                  <p>Loading your audio files...</p>
+                </div>
+                <div class="library-empty" id="audio-empty" style="display: none;">
+                  <i class="fas fa-music"></i>
+                  <p>No uploaded audio files yet</p>
+                  <span class="hint">Upload audio files to see them here</span>
+                </div>
+                <div class="library-grid" id="audio-grid">
+                  <!-- Audio files will be added here -->
+                </div>
+              </div>
+            </div>
+
+            <!-- Import Footer Removed -->
+          </div>
+        </div>
+      </div>
+
+      <!-- Player Section -->
+      <div class="player-section" id="player-section">
+        <div class="player-header">
+          <span class="player-label">Player</span>
+        </div>
+        <div class="player-canvas" id="video-canvas-container">
+          <div class="video-canvas-inner" id="video-canvas">
+            <!-- Main composition canvas for rendering clips -->
+            <canvas id="composition-canvas" class="composition-canvas"></canvas>
+            <!-- Hidden video element for source playback -->
+            <video id="preview-video" class="preview-video" preload="metadata">
+              Your browser does not support video playback.
+            </video>
+            <canvas id="text-frame-canvas" class="text-frame-canvas"></canvas>
+            <canvas id="image-frame-canvas" class="image-frame-canvas"></canvas>
+            <div class="player-placeholder" id="canvas-placeholder">
+              <!-- Empty state - black canvas -->
+            </div>
+            <div class="vignette-overlay" id="vignette-overlay"></div>
+            <div class="filter-badge" id="filter-badge">
+              <i class="fas fa-circle-half-stroke"></i>
+              <span id="filter-badge-text">None</span>
+            </div>
+          </div>
+        </div>
+        <div class="player-controls">
+          <div class="time-display">
+            <span id="current-time">00:00:00:00</span>
+            <span class="time-separator">/</span>
+            <span id="total-time">00:00:00:00</span>
+          </div>
+          <div class="playback-controls">
+            <button class="control-btn" id="skip-start-btn" title="Go to Start">
+              <i class="fas fa-backward"></i>
+            </button>
+            <button class="control-btn play-btn" id="play-btn" title="Play/Pause (Space)">
+              <i class="fas fa-play"></i>
+            </button>
+            <button class="control-btn" id="skip-end-btn" title="Go to End">
+              <i class="fas fa-forward"></i>
+            </button>
+          </div>
+          <!-- REMOVED: display-options (Full, Ratio, Full Screen buttons) -->
+          <!-- REMOVED: speed-control (Playback Speed option) -->
+        </div>
+      </div>
+    </main>
+
+    <!-- Timeline (Bottom Panel - Full Width) -->
+    <div class="timeline-panel" id="timeline-panel">
+      <div class="timeline-toolbar">
+        <div class="toolbar-left">
+          <button class="timeline-tool-btn" id="split-btn" title="Split (S)">
+            <i class="fas fa-grip-lines-vertical"></i>
+          </button>
+          <button class="timeline-tool-btn" id="crop-btn" title="Crop Selected (C)">
+            <i class="fas fa-crop-alt"></i>
+          </button>
+          <button class="timeline-tool-btn" id="detach-audio-btn" title="Detach Audio (D)">
+            <i class="fas fa-unlink"></i>
+          </button>
+          <button class="timeline-tool-btn" id="delete-clip-btn" title="Delete (Del)">
+            <i class="fas fa-trash-alt"></i>
+          </button>
+          <button class="timeline-tool-btn" id="download-clip-btn" title="Download Audio" style="display: none;">
+            <i class="fas fa-download"></i>
+          </button>
+        </div>
+
+        <div class="toolbar-center">
+          <div class="toolbar-time-display" id="time-display">00:00:00.000</div>
+        </div>
+
+        <div class="toolbar-right">
+          <!-- REMOVED: Mic, Magnet, Snapping, Link, Preview Axis buttons -->
+
+          <div class="timeline-zoom-controls" title="Zoom">
+            <button class="timeline-tool-btn icon-only" id="zoom-out-btn" title="Zoom Out">
+              <i class="fas fa-minus"></i>
+            </button>
+            <input type="range" class="timeline-zoom-slider" id="zoom-slider" min="1" max="48" value="24"
+              title="Zoom Level">
+            <button class="timeline-tool-btn icon-only" id="zoom-in-btn" title="Zoom In">
+              <i class="fas fa-plus"></i>
+            </button>
+          </div>
+        </div>
+      </div>
+      
+      <!-- Timeline Area -->
+      <div class="timeline-area">
+        <!-- Track Labels Column (Left) -->
+        <div class="track-labels-column" id="track-labels-column">
+          <div class="track-label-spacer">Time</div>
+          <div class="video-track-label">
+            <i class="fas fa-film"></i>
+            <span>Video</span>
+          </div>
+          <!-- Audio track labels added dynamically by JS -->
+        </div>
+        
+        <!-- Timeline Content Column (Right) -->
+        <div class="timeline-content-column">
+          <!-- Timeline Ruler -->
+          <div class="timeline-ruler" id="timeline-ruler">
+            <!-- Ruler marks generated by JS -->
+          </div>
+          
+          <!-- Timeline Tracks Container -->
+          <div class="timeline-tracks-container">
+            <!-- Video Track -->
+            <div class="timeline-tracks" id="timeline-tracks">
+              <div class="playhead" id="playhead">
+                <div class="playhead-head"></div>
+                <div class="playhead-line"></div>
+              </div>
+              <!-- Video track content generated by JS -->
+              <!-- Audio tracks are appended dynamically by JS -->
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Modals -->
+  <!-- Export Modal -->
+  <div class="modal" id="export-modal">
+    <div class="modal-content export-modal-content">
+      <div class="modal-header">
+        <h2><i class="fas fa-download"></i> Export Video</h2>
+        <button class="modal-close" id="close-export-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="export-options">
+          <div class="export-quality-section">
+            <h3 class="export-section-title">Export Quality</h3>
+            <div class="export-quality-options">
+              <div class="export-quality-option active" data-quality="draft">
+                <div class="quality-icon"><i class="fas fa-bolt"></i></div>
+                <div class="quality-content">
+                  <div class="quality-title">Draft (Fastest)</div>
+                  <div class="quality-description">Quick preview, lower quality</div>
+                </div>
+              </div>
+              <div class="export-quality-option" data-quality="standard">
+                <div class="quality-icon"><i class="fas fa-balance-scale"></i></div>
+                <div class="quality-content">
+                  <div class="quality-title">Standard</div>
+                  <div class="quality-description">Balanced speed and quality</div>
+                </div>
+              </div>
+            </div>
+            <div class="export-settings-info">
+              <span id="export-settings-text">Encoder: x264 fast • Quality: CRF 28 • Audio: 128k</span>
+            </div>
+          </div>
+          <div class="export-options-row">
+            <div class="option-group">
+              <label>Resolution</label>
+              <select id="export-resolution">
+                <option value="project">Match Project</option>
+                <optgroup label="Landscape">
+                  <option value="1080p">1080p Full HD (1920 × 1080)</option>
+                  <option value="720p">720p HD (1280 × 720)</option>
+                  <option value="480p">480p SD (854 × 480)</option>
+                  <option value="360p">360p (640 × 360)</option>
+                </optgroup>
+                <optgroup label="Portrait (Vertical)">
+                  <option value="1080p-portrait">1080p Portrait (1080 × 1920)</option>
+                  <option value="720p-portrait">720p Portrait (720 × 1280)</option>
+                </optgroup>
+                <optgroup label="Square">
+                  <option value="1080-square">1080p Square (1080 × 1080)</option>
+                </optgroup>
+              </select>
+            </div>
+            <div class="option-group">
+              <label>Format</label>
+              <select id="export-format">
+                <option value="mp4">MP4 (H.264)</option>
+                <option value="webm">WebM (VP9)</option>
+              </select>
+            </div>
+          </div>
+          <div class="export-info">
+            <i class="fas fa-desktop"></i>
+            <span class="export-resolution" id="export-resolution-info">Resolution: 1920 × 1080 (Project)</span>
+          </div>
+        </div>
+        <div class="export-progress" id="export-progress">
+          <div class="export-phases" id="export-phases">
+            <div class="export-phase" data-phase="loading">
+              <div class="phase-icon"><i class="fas fa-cog"></i></div>
+              <span class="phase-label">Loading</span>
+            </div>
+            <div class="phase-connector"></div>
+            <div class="export-phase" data-phase="prefetch">
+              <div class="phase-icon"><i class="fas fa-cloud-download-alt"></i></div>
+              <span class="phase-label">Fetching</span>
+            </div>
+            <div class="phase-connector"></div>
+            <div class="export-phase" data-phase="segments">
+              <div class="phase-icon"><i class="fas fa-film"></i></div>
+              <span class="phase-label">Encoding</span>
+            </div>
+            <div class="phase-connector"></div>
+            <div class="export-phase" data-phase="concat">
+              <div class="phase-icon"><i class="fas fa-link"></i></div>
+              <span class="phase-label">Merging</span>
+            </div>
+            <div class="phase-connector"></div>
+            <div class="export-phase" data-phase="finalize">
+              <div class="phase-icon"><i class="fas fa-check-circle"></i></div>
+              <span class="phase-label">Done</span>
+            </div>
+          </div>
+          <div class="progress-bar">
+            <div class="progress-fill" id="progress-fill"></div>
+          </div>
+          <span class="progress-text" id="progress-text">Ready to export</span>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn secondary" id="cancel-export">Cancel</button>
+        <button class="btn primary" id="start-export">
+          <i class="fas fa-download"></i> Export Video
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Export Complete Modal -->
+  <div class="modal" id="export-complete-modal">
+    <div class="modal-content export-complete-modal-content">
+      <div class="modal-header">
+        <div class="export-complete-header">
+          <div class="export-complete-icon">
+            <i class="fas fa-check-circle"></i>
+          </div>
+          <h2>Export Complete!</h2>
+        </div>
+        <button class="modal-close" id="close-export-complete-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <!-- Video Info -->
+        <div class="export-complete-info">
+          <div class="export-info-item">
+            <i class="fas fa-file-video"></i>
+            <span class="info-label">Size</span>
+            <span class="info-value" id="export-file-size">--</span>
+          </div>
+          <div class="export-info-item">
+            <i class="fas fa-clock"></i>
+            <span class="info-label">Duration</span>
+            <span class="info-value" id="export-duration">--</span>
+          </div>
+          <div class="export-info-item">
+            <i class="fas fa-expand"></i>
+            <span class="info-label">Resolution</span>
+            <span class="info-value" id="export-resolution-display">--</span>
+          </div>
+          <div class="export-info-item">
+            <i class="fas fa-stopwatch"></i>
+            <span class="info-label">Processing Time</span>
+            <span class="info-value" id="export-processing-time">--</span>
+          </div>
+        </div>
+
+        <!-- Action Options -->
+        <div class="export-actions-section">
+          <h3>What would you like to do?</h3>
+          
+          <label class="export-action-option">
+            <input type="checkbox" id="export-action-download" checked>
+            <div class="action-option-content">
+              <div class="action-icon">
+                <i class="fas fa-download"></i>
+              </div>
+              <div class="action-details">
+                <span class="action-title">Download to Device</span>
+                <span class="action-description">Save the video file to your computer</span>
+              </div>
+            </div>
+          </label>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn secondary" id="cancel-export-actions">Cancel</button>
+        <button class="btn primary" id="confirm-export-actions">
+          <i class="fas fa-check"></i> Confirm
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Text Frame Modal -->
+  <div class="modal" id="text-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2><i class="fas fa-font"></i> Add Text</h2>
+        <button class="modal-close" id="close-text-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Text Content</label>
+          <textarea id="text-content" rows="3" placeholder="Enter your text..."></textarea>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Font</label>
+            <select id="text-font">
+              <option value="DM Sans">DM Sans</option>
+              <option value="Inter">Inter</option>
+              <option value="Arial">Arial</option>
+              <option value="Georgia">Georgia</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Size</label>
+            <select id="text-size">
+              <option value="24">Small</option>
+              <option value="36">Medium</option>
+              <option value="48" selected>Large</option>
+              <option value="64">X-Large</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Text Color</label>
+            <input type="color" id="text-color" value="#ffffff">
+          </div>
+          <div class="form-group">
+            <label>Background</label>
+            <input type="color" id="bg-color" value="#000000">
+          </div>
+          <div class="form-group">
+            <label>Duration (s)</label>
+            <input type="number" id="text-duration" value="3" min="1" max="60">
+          </div>
+        </div>
+        <div class="text-preview-container">
+          <div id="text-preview" class="text-preview">Preview</div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn secondary" id="cancel-text">Cancel</button>
+        <button class="btn primary" id="add-text-btn">
+          <i class="fas fa-plus"></i> Add to Timeline
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Image Frame Modal -->
+  <div class="modal" id="image-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2><i class="fas fa-image"></i> Add Image</h2>
+        <button class="modal-close" id="close-image-modal">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Select Image from Assets</label>
+          <div id="image-assets-grid" class="image-assets-grid"></div>
+          <div id="image-assets-empty" class="image-assets-empty" style="display: none;">
+            <i class="fas fa-image"></i>
+            <p>No images available. Upload images to assets first.</p>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Duration (s)</label>
+          <input type="number" id="image-duration" value="3" min="1" max="60">
+        </div>
+        <div class="image-preview-container">
+          <div id="image-preview" class="image-preview">
+            <p style="color: var(--text-muted);">Select an image to preview</p>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn secondary" id="cancel-image">Cancel</button>
+        <button class="btn primary" id="add-image-btn" disabled>
+          <i class="fas fa-plus"></i> Add to Timeline
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Clip Transform Modal -->
+  <div class="modal" id="crop-modal">
+    <div class="modal-content transform-modal-content">
+      <div class="modal-header">
+        <h2><i class="fas fa-crop-alt"></i> Edit Clip</h2>
+        <button class="modal-close" id="close-crop-modal">&times;</button>
+      </div>
+      <div class="modal-body transform-modal-body">
+        <!-- Two-panel layout -->
+        <div class="transform-panels">
+          <!-- Left: Source Crop -->
+          <div class="transform-panel">
+            <div class="panel-header">
+              <h3><i class="fas fa-crop"></i> Source Crop</h3>
+              <span class="panel-hint">Select area from source video</span>
+            </div>
+            <div class="crop-preview-container">
+              <div class="crop-preview-wrapper" id="crop-preview-wrapper">
+                <video id="crop-preview-video" class="crop-preview-video" muted></video>
+                <div class="crop-overlay" id="crop-overlay">
+                  <div class="crop-box" id="crop-box">
+                    <div class="crop-handle crop-handle-nw" data-handle="nw"></div>
+                    <div class="crop-handle crop-handle-n" data-handle="n"></div>
+                    <div class="crop-handle crop-handle-ne" data-handle="ne"></div>
+                    <div class="crop-handle crop-handle-e" data-handle="e"></div>
+                    <div class="crop-handle crop-handle-se" data-handle="se"></div>
+                    <div class="crop-handle crop-handle-s" data-handle="s"></div>
+                    <div class="crop-handle crop-handle-sw" data-handle="sw"></div>
+                    <div class="crop-handle crop-handle-w" data-handle="w"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="crop-presets">
+              <label>Crop Ratio</label>
+              <div class="preset-buttons">
+                <button class="preset-btn active" data-ratio="free">Free</button>
+                <button class="preset-btn" data-ratio="project">Match Project</button>
+                <button class="preset-btn" data-ratio="16:9">16:9</button>
+                <button class="preset-btn" data-ratio="9:16">9:16</button>
+                <button class="preset-btn" data-ratio="1:1">1:1</button>
+              </div>
+            </div>
+          </div>
+          
+          <!-- Right: Canvas Position -->
+          <div class="transform-panel">
+            <div class="panel-header">
+              <h3><i class="fas fa-arrows-alt"></i> Canvas Position</h3>
+              <span class="panel-hint">Position clip on project canvas (<span id="project-res-hint">1920×1080</span>)</span>
+            </div>
+            <div class="canvas-position-preview" id="canvas-position-preview">
+              <div class="canvas-frame" id="canvas-frame">
+                <div class="clip-preview-box" id="clip-preview-box">
+                  <video id="position-preview-video" class="position-preview-video" muted></video>
+                </div>
+              </div>
+            </div>
+            <div class="position-controls">
+              <div class="position-row">
+                <div class="position-input-group">
+                  <label>X Position</label>
+                  <input type="number" id="clip-pos-x" value="0">
+                </div>
+                <div class="position-input-group">
+                  <label>Y Position</label>
+                  <input type="number" id="clip-pos-y" value="0">
+                </div>
+              </div>
+              <div class="position-row">
+                <div class="position-input-group">
+                  <label>Scale</label>
+                  <div class="scale-input-wrapper">
+                    <input type="range" id="clip-scale-slider" min="10" max="200" value="100">
+                    <input type="number" id="clip-scale" value="100" min="10" max="200">
+                    <span class="unit">%</span>
+                  </div>
+                </div>
+              </div>
+              <div class="position-presets">
+                <label>Quick Position</label>
+                <div class="position-preset-grid">
+                  <button class="position-preset-btn" data-position="top-left" title="Top Left">↖</button>
+                  <button class="position-preset-btn" data-position="top-center" title="Top Center">↑</button>
+                  <button class="position-preset-btn" data-position="top-right" title="Top Right">↗</button>
+                  <button class="position-preset-btn" data-position="center-left" title="Center Left">←</button>
+                  <button class="position-preset-btn" data-position="center" title="Center">●</button>
+                  <button class="position-preset-btn" data-position="center-right" title="Center Right">→</button>
+                  <button class="position-preset-btn" data-position="bottom-left" title="Bottom Left">↙</button>
+                  <button class="position-preset-btn" data-position="bottom-center" title="Bottom Center">↓</button>
+                  <button class="position-preset-btn" data-position="bottom-right" title="Bottom Right">↘</button>
+                </div>
+                <button class="btn-fit-canvas" id="fit-canvas-btn">
+                  <i class="fas fa-expand-arrows-alt"></i> Fit to Canvas
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn secondary" id="reset-crop-btn">
+          <i class="fas fa-undo"></i> Reset All
+        </button>
+        <div class="modal-footer-right">
+          <button class="btn secondary" id="cancel-crop">Cancel</button>
+          <button class="btn primary" id="apply-crop-btn">
+            <i class="fas fa-check"></i> Apply Changes
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Keyboard Shortcuts Modal -->
+  <div class="modal" id="shortcuts-modal">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h2><i class="fas fa-keyboard"></i> Keyboard Shortcuts</h2>
+        <button class="modal-close" id="close-shortcuts">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="shortcuts-grid">
+          <div class="shortcut"><kbd>Space</kbd><span>Play / Pause</span></div>
+          <div class="shortcut"><kbd>S</kbd><span>Split at Playhead</span></div>
+          <div class="shortcut"><kbd>T</kbd><span>Add Text</span></div>
+          <div class="shortcut"><kbd>C</kbd><span>Crop Selected</span></div>
+          <div class="shortcut"><kbd>D</kbd><span>Detach Audio</span></div>
+          <div class="shortcut"><kbd>F</kbd><span>Open Filters</span></div>
+          <div class="shortcut"><kbd>M</kbd><span>Mute Audio Tracks</span></div>
+          <div class="shortcut"><kbd>Del</kbd><span>Delete Selected</span></div>
+          <div class="shortcut"><kbd>-</kbd><span>Zoom Out</span></div>
+          <div class="shortcut"><kbd>+</kbd><span>Zoom In</span></div>
+          <div class="shortcut"><kbd>←</kbd><span>Previous Frame</span></div>
+          <div class="shortcut"><kbd>→</kbd><span>Next Frame</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden Assets Popup (for JS backward compatibility - media shown in import section) -->
+  <div class="assets-popup" id="assets-popup" style="display: none;"></div>
+
+  <!-- Filters Popup -->
+  <div class="filters-popup" id="filters-popup">
+    <div class="popup-header">
+      <div class="popup-title">
+        <i class="fas fa-circle-half-stroke"></i>
+        <span>Video Filters</span>
+      </div>
+      <button class="popup-close" id="filters-popup-close">
+        <i class="fas fa-times"></i>
+      </button>
+    </div>
+    <div class="popup-content">
+      <div class="filters-header">
+        <h3>Filter Presets</h3>
+        <button class="btn-reset-filters" id="reset-filters-btn" title="Reset all filters">
+          <i class="fas fa-undo"></i> Reset
+        </button>
+      </div>
+      
+      <!-- Filter Presets -->
+      <div class="filter-section">
+        <div class="filter-presets-grid">
+          <button class="filter-preset-btn active" data-preset="none" title="No Filter">
+            <div class="preset-preview preset-none"></div>
+            <span>None</span>
+          </button>
+          <button class="filter-preset-btn" data-preset="grayscale" title="Black & White">
+            <div class="preset-preview preset-grayscale"></div>
+            <span>B&W</span>
+          </button>
+          <button class="filter-preset-btn" data-preset="sepia" title="Sepia">
+            <div class="preset-preview preset-sepia"></div>
+            <span>Sepia</span>
+          </button>
+          <button class="filter-preset-btn" data-preset="vintage" title="Vintage">
+            <div class="preset-preview preset-vintage"></div>
+            <span>Vintage</span>
+          </button>
+          <button class="filter-preset-btn" data-preset="warm" title="Warm">
+            <div class="preset-preview preset-warm"></div>
+            <span>Warm</span>
+          </button>
+          <button class="filter-preset-btn" data-preset="cool" title="Cool">
+            <div class="preset-preview preset-cool"></div>
+            <span>Cool</span>
+          </button>
+          <button class="filter-preset-btn" data-preset="dramatic" title="Dramatic">
+            <div class="preset-preview preset-dramatic"></div>
+            <span>Dramatic</span>
+          </button>
+          <button class="filter-preset-btn" data-preset="fade" title="Faded">
+            <div class="preset-preview preset-fade"></div>
+            <span>Fade</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast Container -->
+  <div id="toast-container"></div>
+
+  <!-- Scripts -->
+  <script src="/static/js/api.js"></script>
+  <script src="/static/js/videoEditor/state.js"></script>
+  <script src="/static/js/videoEditor/utils.js"></script>
+  <script src="/static/js/videoEditor/timeline.js"></script>
+  <script src="/static/js/videoEditor/playback.js"></script>
+  <script src="/static/js/videoEditor/assets.js"></script>
+  <script src="/static/js/videoEditor/crop.js"></script>
+  <script src="/static/js/videoEditor/filters.js"></script>
+  <script src="/static/js/videoEditor/export.js"></script>
+  <script src="/static/js/videoEditor/projects.js"></script>
+  <script src="/static/js/videoEditor.js"></script>
+
+  <!-- V2 UI Interactions -->
+  <script>
+    (function() {
+      'use strict';
+      
+      // Wait for DOM ready
+      document.addEventListener('DOMContentLoaded', function() {
+        // Nav tool switching
+        const navTools = document.querySelectorAll('.nav-tool');
+        const filtersPopup = document.getElementById('filters-popup');
+        const textModal = document.getElementById('text-modal');
+        
+        navTools.forEach(tool => {
+          tool.addEventListener('click', function() {
+            const toolType = this.dataset.tool;
+            
+            // Skip if locked
+            if (this.classList.contains('locked')) {
+              return;
+            }
+            
+            // Update active state
+            navTools.forEach(t => {
+              t.classList.remove('active');
+              t.removeAttribute('aria-current');
+            });
+            this.classList.add('active');
+            this.setAttribute('aria-current', 'true');
+            
+            // Get panels
+            const projectAssetsPanel = document.getElementById('project-assets-panel');
+            const audioPanel = document.getElementById('audio-panel');
+            
+            // Handle different tools
+            if (toolType === 'filters') {
+              if (filtersPopup) {
+                filtersPopup.classList.add('active');
+              }
+            } else if (toolType === 'text') {
+              // Open text modal
+              if (window.VideoEditor && typeof window.VideoEditor.openTextModal === 'function') {
+                window.VideoEditor.openTextModal();
+              } else if (textModal) {
+                textModal.classList.add('show');
+              }
+            } else if (toolType === 'audio') {
+              // Show audio panel, hide others
+              if (projectAssetsPanel) projectAssetsPanel.classList.remove('active');
+              if (audioPanel) {
+                audioPanel.classList.add('active');
+                // Load audio files if not already loaded
+                if (window.VideoEditor && typeof window.VideoEditor.loadUploadedAudio === 'function') {
+                  window.VideoEditor.loadUploadedAudio();
+                }
+              }
+              // Close filters popup
+              if (filtersPopup) {
+                filtersPopup.classList.remove('active');
+              }
+            } else if (toolType === 'media') {
+              // Show project assets panel, hide audio
+              if (audioPanel) audioPanel.classList.remove('active');
+              if (projectAssetsPanel) projectAssetsPanel.classList.add('active');
+              // Close filters popup
+              if (filtersPopup) {
+                filtersPopup.classList.remove('active');
+              }
+            } else {
+              // Close filters popup when switching to other tools
+              if (filtersPopup) {
+                filtersPopup.classList.remove('active');
+              }
+            }
+          });
+        });
+
+        // Keyboard: activate nav tools
+        navTools.forEach(tool => {
+          tool.addEventListener('keydown', function(e) {
+            if (e.key !== 'Enter' && e.key !== ' ') return;
+            if (this.classList.contains('locked')) return;
+            e.preventDefault();
+            this.click();
+          });
+        });
+        
+        // Filters popup close button
+        const filtersPopupClose = document.getElementById('filters-popup-close');
+        if (filtersPopupClose && filtersPopup) {
+          filtersPopupClose.addEventListener('click', function() {
+            filtersPopup.classList.remove('active');
+            navTools.forEach(t => {
+              t.classList.remove('active');
+              t.removeAttribute('aria-current');
+            });
+            const mediaNav = document.getElementById('nav-media');
+            if (mediaNav) {
+              mediaNav.classList.add('active');
+              mediaNav.setAttribute('aria-current', 'true');
+            }
+          });
+        }
+        
+        // Project name editing is handled by VE.setupProjectTitleEditing() in projects.js
+
+        const themeBtn = document.getElementById('standalone-theme-toggle');
+        if (themeBtn) {
+          themeBtn.addEventListener('click', function() {
+            var html = document.documentElement;
+            var next = html.getAttribute('data-theme') === 'dark' ? 'light' : 'dark';
+            html.setAttribute('data-theme', next);
+            try { localStorage.setItem('standalone-video-editor-theme', next); } catch (e) {}
+          });
+        }
+
+      });
+    })();
+  </script>
+</body>
+
+</html>
